@@ -1,0 +1,8 @@
+streamlit
+streamlit-autorefresh
+ccxt
+pandas
+numpy
+matplotlib
+mplfinance
+requests
