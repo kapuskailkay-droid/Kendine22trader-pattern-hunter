@@ -4,7 +4,6 @@ import urllib.parse
 import ccxt
 import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 import mplfinance as mpf
 import numpy as np
 import pandas as pd
@@ -21,14 +20,14 @@ GOMULU_TOPIC_ID = "3802"
 
 # --- SAYFA YAPILANDIRMASI ---
 st.set_page_config(
-    page_title="KENDİNE22TRADER - Retest Onaylı Formasyon Radarı",
+    page_title="KENDİNE22TRADER - Çoklu Zaman Dilimli Retest Radarı",
     layout="wide"
 )
 
 if "retest_hafiza" not in st.session_state:
     st.session_state.retest_hafiza = set()
 
-# --- YAN PANEL: TELEGRAM AYARLARI ---
+# --- YAN PANEL: TELEGRAM VE AYARLAR ---
 st.sidebar.header("📱 Telegram Bildirim Ayarları")
 telegram_aktif = st.sidebar.checkbox("🚀 Telegram'a Gönder", value=True)
 bot_token = st.sidebar.text_input("Telegram Bot Token", value=GOMULU_BOT_TOKEN, type="password")
@@ -36,58 +35,29 @@ chat_id = st.sidebar.text_input("Telegram Chat ID", value=GOMULU_CHAT_ID)
 topic_id = st.sidebar.text_input("Formasyon Sekmesi Topic ID", value=GOMULU_TOPIC_ID)
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Canlı Yayın & Tarama")
+st.sidebar.header("⚙️ Canlı Çoklu Tarama Ayarları")
 
-oto_yenileme = st.sidebar.checkbox("🔄 Otomatik Canlı Taramayı Aç", value=False)
-yenileme_araligi = st.sidebar.selectbox("Tarama Sıklığı", options=[15, 30, 60, 120, 300], index=2, format_func=lambda x: f"{x} Saniyede Bir")
+oto_yenileme = st.sidebar.checkbox("🔄 Otomatik Canlı Taramayı Aç", value=True)
+yenileme_araligi = st.sidebar.selectbox("Tarama Sıklığı", options=[30, 60, 120, 300], index=1, format_func=lambda x: f"{x} Saniyede Bir")
 
 if oto_yenileme:
-    st_autorefresh(interval=yenileme_araligi * 1000, key="retest_tarayici")
-    st.sidebar.success(f"🟢 Canlı mod aktif: Her {yenileme_araligi} sn")
+    st_autorefresh(interval=yenileme_araligi * 1000, key="multi_tf_tarayici")
+    st.sidebar.success(f"🟢 Canlı Tüm Zaman Dilimleri Taranıyor ({yenileme_araligi} sn)")
 
 st.sidebar.markdown("---")
-st.sidebar.header("🎯 Retest Onaylı Formasyonlar")
-
-zaman_dilimi = st.sidebar.selectbox(
-    "Zaman Dilimi (Timeframe)",
-    options=["15m", "1h", "4h", "1d"],
-    index=0
-)
-
-aktif_formasyonlar = st.sidebar.multiselect(
-    "Taranacak Onaylı Formasyonlar",
-    options=[
-        "W Formasyonu (Retest Onaylı İkili Dip)",
-        "M Formasyonu (Retest Onaylı İkili Tepe)",
-        "TOBO (Retest Onaylı Ters OBO)",
-        "OBO (Retest Onaylı OBO)",
-        "Boğa Bayrağı (Retest Onaylı Bull Flag)",
-        "Ayı Bayrağı (Retest Onaylı Bear Flag)",
-        "Yükselen Üçgen (Retest Onaylı)",
-        "Alçalan Üçgen (Retest Onaylı)"
-    ],
-    default=[
-        "W Formasyonu (Retest Onaylı İkili Dip)",
-        "M Formasyonu (Retest Onaylı İkili Tepe)",
-        "TOBO (Retest Onaylı Ters OBO)",
-        "OBO (Retest Onaylı OBO)",
-        "Boğa Bayrağı (Retest Onaylı Bull Flag)",
-        "Ayı Bayrağı (Retest Onaylı Bear Flag)",
-        "Yükselen Üçgen (Retest Onaylı)",
-        "Alçalan Üçgen (Retest Onaylı)"
-    ]
-)
+st.sidebar.info("🔍 **Otomatik Taranan Zaman Dilimleri:**\n• 15 Dakika (15m)\n• 30 Dakika (30m)\n• 1 Saat (1h)\n• 4 Saat (4h)\n• 1 Gün (1d)\n• 1 Hafta (1w)")
 
 coin_adedi = st.sidebar.select_slider(
     "Taranacak En Yüksek Hacimli Coin Sayısı",
-    options=[30, 50, 100, 150, 200],
-    value=100
+    options=[20, 40, 60, 80, 100],
+    value=40,
+    help="Çoklu zaman dilimi tarandığı için 40-60 aralığı en hızlı ve stabil performansı sağlar."
 )
 
-st.title("🛡️ KENDİNE22TRADER - ÇİZİMLİ RETEST FORMASYON RADARI")
+st.title("🛡️ KENDİNE22TRADER - TÜM ZAMAN DİLİMLERİ RETEST FORMASYON RADARI")
 
-# --- GELİŞMİŞ VE NET FORMASYON ÇİZİMLİ GRAFİK OLUŞTURUCU ---
-def grafik_olustur_cizimli(df_mum, sembol, zaman_dilimi, formasyon_adi, kirilan_seviye, tp1, tp2, sl, yon):
+# --- GELİŞMİŞ ÇİZİMLİ GRAFİK OLUŞTURUCU ---
+def grafik_olustur_cizimli(df_mum, sembol, tf_etiket, formasyon_adi, kirilan_seviye, tp1, tp2, sl):
     df_grafik = df_mum.copy()
     df_grafik['Zaman'] = pd.to_datetime(df_grafik['Zaman'], unit='ms')
     df_grafik.set_index('Zaman', inplace=True)
@@ -107,7 +77,6 @@ def grafik_olustur_cizimli(df_mum, sembol, zaman_dilimi, formasyon_adi, kirilan_
         figcolor='#0E1117'
     )
     
-    # Seviye çizgileri
     hlines_dict = dict(
         hlines=[kirilan_seviye, tp1, tp2, sl],
         colors=['#00D4FF', '#00FF88', '#38EF7D', '#FF3366'],
@@ -128,10 +97,8 @@ def grafik_olustur_cizimli(df_mum, sembol, zaman_dilimi, formasyon_adi, kirilan_
     )
     
     ax_main = axes[0]
-    
-    # Üst Başlık & Trader İmzası
     ax_main.set_title(
-        f"KENDİNE22TRADER | {sembol} ({zaman_dilimi}) - {formasyon_adi}",
+        f"KENDİNE22TRADER | {sembol} ({tf_etiket}) - {formasyon_adi}",
         fontsize=12,
         fontweight='bold',
         color='#F4E07B',
@@ -139,8 +106,6 @@ def grafik_olustur_cizimli(df_mum, sembol, zaman_dilimi, formasyon_adi, kirilan_
     )
     
     son_x = len(df_plot) - 1
-    
-    # Seviye Etiket Kutuları (Kusursuz Görünüm)
     ax_main.text(
         son_x, kirilan_seviye, f"  ⚡ Retest/Kırılım: {kirilan_seviye}$",
         color='#00D4FF', fontsize=8.5, fontweight='bold',
@@ -188,7 +153,7 @@ def telegram_fotograf_gonder(foto_buf, caption_metni):
         except Exception:
             pass
 
-# --- ATR VE HEDEF HESAPLAMA ---
+# --- HESAPLAYICILAR ---
 def hesapla_atr(df, periyot=14):
     h_l = df['Yuksek'] - df['Dusuk']
     h_pc = (df['Yuksek'] - df['Kapanis'].shift(1)).abs()
@@ -225,8 +190,8 @@ def retest_formasyon_bul(df, hacim_orani):
         if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
             tepe_idx.append(i)
             
-    # 1. W Formasyonu (İkili Dip Retest)
-    if "W Formasyonu (Retest Onaylı İkili Dip)" in aktif_formasyonlar and len(dip_idx) >= 2:
+    # W Formasyonu (İkili Dip)
+    if len(dip_idx) >= 2:
         d1, d2 = dip_idx[-2], dip_idx[-1]
         if abs(lows[d1] - lows[d2]) / lows[d1] <= 0.022 and (d2 - d1) >= 5 and (len(df) - 1 - d2) <= 12:
             boyun = round(float(max([highs[k] for k in range(d1, d2+1)])), 6)
@@ -235,8 +200,8 @@ def retest_formasyon_bul(df, hacim_orani):
             if kirilim_oldu and retest_degdi and (c_son > boyun) and (c_son > o_son) and hacim_orani >= 1.1:
                 return "📐 W FORMASYONU (RETEST ONAYLANDI 🚀)", "🟢 LONG", boyun
 
-    # 2. M Formasyonu (İkili Tepe Retest)
-    if "M Formasyonu (Retest Onaylı İkili Tepe)" in aktif_formasyonlar and len(tepe_idx) >= 2:
+    # M Formasyonu (İkili Tepe)
+    if len(tepe_idx) >= 2:
         t1, t2 = tepe_idx[-2], tepe_idx[-1]
         if abs(highs[t1] - highs[t2]) / highs[t1] <= 0.022 and (t2 - t1) >= 5 and (len(df) - 1 - t2) <= 12:
             taban = round(float(min([lows[k] for k in range(t1, t2+1)])), 6)
@@ -245,8 +210,8 @@ def retest_formasyon_bul(df, hacim_orani):
             if kirilim_oldu and retest_degdi and (c_son < taban) and (c_son < o_son) and hacim_orani >= 1.1:
                 return "📐 M FORMASYONU (RETEST ONAYLANDI 🩸)", "🔴 SHORT", taban
 
-    # 3. TOBO (Ters OBO Retest)
-    if "TOBO (Retest Onaylı Ters OBO)" in aktif_formasyonlar and len(dip_idx) >= 3:
+    # TOBO
+    if len(dip_idx) >= 3:
         sol, bas, sag = dip_idx[-3], dip_idx[-2], dip_idx[-1]
         if lows[bas] < lows[sol] and lows[bas] < lows[sag] and abs(lows[sol] - lows[sag]) / lows[sol] <= 0.035:
             boyun = round(float(max(max(highs[sol:bas]), max(highs[bas:sag+1]))), 6)
@@ -255,8 +220,8 @@ def retest_formasyon_bul(df, hacim_orani):
             if kirilim_oldu and retest_degdi and (c_son > boyun) and (c_son > o_son) and hacim_orani >= 1.1:
                 return "👤 TOBO (RETEST ONAYLANDI 🚀)", "🟢 LONG", boyun
 
-    # 4. OBO (Omuz Baş Omuz Retest)
-    if "OBO (Retest Onaylı OBO)" in aktif_formasyonlar and len(tepe_idx) >= 3:
+    # OBO
+    if len(tepe_idx) >= 3:
         sol, bas, sag = tepe_idx[-3], tepe_idx[-2], tepe_idx[-1]
         if highs[bas] > highs[sol] and highs[bas] > highs[sag] and abs(highs[sol] - highs[sag]) / highs[sol] <= 0.035:
             taban = round(float(min(min(lows[sol:bas]), min(lows[bas:sag+1]))), 6)
@@ -265,8 +230,8 @@ def retest_formasyon_bul(df, hacim_orani):
             if kirilim_oldu and retest_degdi and (c_son < taban) and (c_son < o_son) and hacim_orani >= 1.1:
                 return "👤 OBO (RETEST ONAYLANDI 🩸)", "🔴 SHORT", taban
 
-    # 5. Boğa Bayrağı (Bull Flag Retest)
-    if "Boğa Bayrağı (Retest Onaylı Bull Flag)" in aktif_formasyonlar and len(df) >= 20:
+    # Boğa Bayrağı
+    if len(df) >= 20:
         direk = ((closes[-6] - closes[-18]) / closes[-18]) * 100
         flama_tavan = round(float(max(highs[-6:-2])), 6)
         flama_taban = min(lows[-6:-2])
@@ -276,8 +241,8 @@ def retest_formasyon_bul(df, hacim_orani):
             if kirilim_oldu and retest_degdi and (c_son > flama_tavan) and (c_son > o_son):
                 return "🚩 BOĞA BAYRAĞI (RETEST ONAYLANDI 🚀)", "🟢 LONG", flama_tavan
 
-    # 6. Ayı Bayrağı (Bear Flag Retest)
-    if "Ayı Bayrağı (Retest Onaylı Bear Flag)" in aktif_formasyonlar and len(df) >= 20:
+    # Ayı Bayrağı
+    if len(df) >= 20:
         direk = ((closes[-6] - closes[-18]) / closes[-18]) * 100
         flama_tavan = max(highs[-6:-2])
         flama_taban = round(float(min(lows[-6:-2])), 6)
@@ -287,8 +252,8 @@ def retest_formasyon_bul(df, hacim_orani):
             if kirilim_oldu and retest_degdi and (c_son < flama_taban) and (c_son < o_son):
                 return "🚩 AYI BAYRAĞI (RETEST ONAYLANDI 🩸)", "🔴 SHORT", flama_taban
 
-    # 7. Yükselen Üçgen Retest
-    if "Yükselen Üçgen (Retest Onaylı)" in aktif_formasyonlar and len(tepe_idx) >= 2 and len(dip_idx) >= 2:
+    # Yükselen Üçgen
+    if len(tepe_idx) >= 2 and len(dip_idx) >= 2:
         t1, t2 = highs[tepe_idx[-2]], highs[tepe_idx[-1]]
         d1, d2 = lows[dip_idx[-2]], lows[dip_idx[-1]]
         if abs(t1 - t2) / t1 <= 0.015 and d2 > d1:
@@ -298,8 +263,8 @@ def retest_formasyon_bul(df, hacim_orani):
             if kirilim_oldu and retest_degdi and (c_son > direnc) and (c_son > o_son):
                 return "📐 YÜKSELEN ÜÇGEN (RETEST ONAYLANDI 🚀)", "🟢 LONG", direnc
 
-    # 8. Alçalan Üçgen Retest
-    if "Alçalan Üçgen (Retest Onaylı)" in aktif_formasyonlar and len(tepe_idx) >= 2 and len(dip_idx) >= 2:
+    # Alçalan Üçgen
+    if len(tepe_idx) >= 2 and len(dip_idx) >= 2:
         t1, t2 = highs[tepe_idx[-2]], highs[tepe_idx[-1]]
         d1, d2 = lows[dip_idx[-2]], lows[dip_idx[-1]]
         if abs(d1 - d2) / d1 <= 0.015 and t2 < t1:
@@ -311,8 +276,8 @@ def retest_formasyon_bul(df, hacim_orani):
 
     return None, None, None
 
-# --- PİYASA TARAMA MOTORU ---
-def piyasa_tara():
+# --- ÇOKLU ZAMAN DİLİMİ TARAYICI MOTORU ---
+def coklu_zaman_dilimi_tara():
     mexc = ccxt.mexc({'options': {'defaultType': 'swap'}, 'enableRateLimit': True})
     
     try:
@@ -325,88 +290,100 @@ def piyasa_tara():
     usdt_pariteler.sort(key=lambda x: tickers[x].get('quoteVolume', 0) or 0, reverse=True)
     hedef_listesi = usdt_pariteler[:coin_adedi]
     
+    # GÖMÜLÜ TÜM ZAMAN DİLİMLERİ LİSTESİ
+    zaman_dilimleri = [
+        ("15m", "15 Dakika"),
+        ("30m", "30 Dakika"),
+        ("1h", "1 Saat"),
+        ("4h", "4 Saat"),
+        ("1d", "1 Gün"),
+        ("1w", "1 Hafta")
+    ]
+    
     sonuclar = []
     
     for sembol in hedef_listesi:
-        try:
-            mumlar = mexc.fetch_ohlcv(sembol, timeframe=zaman_dilimi, limit=50)
-            if len(mumlar) >= 30:
-                df = pd.DataFrame(mumlar, columns=['Zaman', 'Acilis', 'Yuksek', 'Dusuk', 'Kapanis', 'Hacim'])
-                
-                gecmis_hacim = df['Hacim'].iloc[:-1].mean()
-                son_hacim = df['Hacim'].iloc[-1]
-                hacim_orani = (son_hacim / gecmis_hacim) if gecmis_hacim > 0 else 0
-                son_kapanis = df['Kapanis'].iloc[-1]
-                
-                formasyon_adi, yon, kirilan_seviye = retest_formasyon_bul(df, hacim_orani)
-                
-                if formasyon_adi:
-                    temiz_parite = sembol.split(':')[0]
-                    mexc_kod = temiz_parite.replace('/', '_')
-                    mexc_link = f"https://www.mexc.com/tr-TR/futures/{mexc_kod}"
+        temiz_parite = sembol.split(':')[0]
+        mexc_kod = temiz_parite.replace('/', '_')
+        mexc_link = f"https://www.mexc.com/tr-TR/futures/{mexc_kod}"
+        
+        for tf_kod, tf_ad in zaman_dilimleri:
+            try:
+                mumlar = mexc.fetch_ohlcv(sembol, timeframe=tf_kod, limit=50)
+                if len(mumlar) >= 30:
+                    df = pd.DataFrame(mumlar, columns=['Zaman', 'Acilis', 'Yuksek', 'Dusuk', 'Kapanis', 'Hacim'])
                     
-                    atr = hesapla_atr(df)
-                    yon_turu = "LONG" if "LONG" in yon else "SHORT"
-                    tp1, tp2, sl = hesapla_tp_sl(son_kapanis, atr, yon=yon_turu)
+                    gecmis_hacim = df['Hacim'].iloc[:-1].mean()
+                    son_hacim = df['Hacim'].iloc[-1]
+                    hacim_orani = (son_hacim / gecmis_hacim) if gecmis_hacim > 0 else 0
+                    son_kapanis = df['Kapanis'].iloc[-1]
                     
-                    sinyal_id = f"{temiz_parite}_{formasyon_adi}_{zaman_dilimi}"
+                    formasyon_adi, yon, kirilan_seviye = retest_formasyon_bul(df, hacim_orani)
                     
-                    # Telegram'a Çizimli Gönderim
-                    if telegram_aktif and sinyal_id not in st.session_state.retest_hafiza:
-                        tg_caption = (
-                            f"🛡️ <b>KENDİNE22TRADER RETEST SİNYALİ</b>\n\n"
-                            f"📌 <b>Parite:</b> {temiz_parite}\n"
-                            f"🎯 <b>Yön:</b> {yon}\n"
-                            f"⚡ <b>Formasyon:</b> {formasyon_adi}\n"
-                            f"📏 <b>Kırılan/Retest Seviyesi:</b> {kirilan_seviye} $\n"
-                            f"⏱ <b>Zaman:</b> {zaman_dilimi}\n"
-                            f"💰 <b>Onaylı Giriş:</b> {son_kapanis} $\n"
-                            f"📊 <b>Hacim Katı:</b> {round(hacim_orani, 1)}x\n\n"
-                            f"🎯 <b>HEDEF 1 (TP1):</b> {tp1} $\n"
-                            f"🎯 <b>HEDEF 2 (TP2):</b> {tp2} $\n"
-                            f"🛑 <b>STOP-LOSS:</b> {sl} $\n\n"
-                            f"🔗 <a href='{mexc_link}'>MEXC Vadeli Grafiği Aç ↗</a>"
-                        )
-                        try:
-                            foto_buffer = grafik_olustur_cizimli(
-                                df, temiz_parite, zaman_dilimi, formasyon_adi, kirilan_seviye, tp1, tp2, sl, yon
+                    if formasyon_adi:
+                        atr = hesapla_atr(df)
+                        yon_turu = "LONG" if "LONG" in yon else "SHORT"
+                        tp1, tp2, sl = hesapla_tp_sl(son_kapanis, atr, yon=yon_turu)
+                        
+                        sinyal_id = f"{temiz_parite}_{formasyon_adi}_{tf_kod}"
+                        
+                        # Telegram'a Çizimli Bildirim
+                        if telegram_aktif and sinyal_id not in st.session_state.retest_hafiza:
+                            tg_caption = (
+                                f"🛡️ <b>KENDİNE22TRADER ÇOKLU FORMASYON SİNYALİ</b>\n\n"
+                                f"📌 <b>Parite:</b> {temiz_parite}\n"
+                                f"⏱ <b>Zaman Dilimi:</b> <b>{tf_ad} ({tf_kod})</b>\n"
+                                f"🎯 <b>Yön:</b> {yon}\n"
+                                f"⚡ <b>Formasyon:</b> {formasyon_adi}\n"
+                                f"📏 <b>Kırılan/Retest Seviyesi:</b> {kirilan_seviye} $\n"
+                                f"💰 <b>Onaylı Giriş:</b> {son_kapanis} $\n"
+                                f"📊 <b>Hacim Katı:</b> {round(hacim_orani, 1)}x\n\n"
+                                f"🎯 <b>HEDEF 1 (TP1):</b> {tp1} $\n"
+                                f"🎯 <b>HEDEF 2 (TP2):</b> {tp2} $\n"
+                                f"🛑 <b>STOP-LOSS:</b> {sl} $\n\n"
+                                f"🔗 <a href='{mexc_link}'>MEXC Vadeli Grafiği Aç ↗</a>"
                             )
-                            telegram_fotograf_gonder(foto_buffer, tg_caption)
-                        except Exception:
-                            pass
-                            
-                        st.session_state.retest_hafiza.add(sinyal_id)
-                    
-                    sonuclar.append({
-                        "Yön": yon,
-                        "Onaylanan Formasyon": formasyon_adi,
-                        "Kırılan/Retest Hattı": f"{kirilan_seviye} $",
-                        "Sembol": temiz_parite,
-                        "Onay Fiyatı ($)": son_kapanis,
-                        "TP1 ($)": tp1,
-                        "TP2 ($)": tp2,
-                        "SL ($)": sl,
-                        "Hacim Katı": f"{round(hacim_orani, 1)}x",
-                        "Grafik": mexc_link
-                    })
-        except Exception:
-            pass
-            
+                            try:
+                                foto_buffer = grafik_olustur_cizimli(
+                                    df, temiz_parite, f"{tf_ad} ({tf_kod})", formasyon_adi, kirilan_seviye, tp1, tp2, sl
+                                )
+                                telegram_fotograf_gonder(foto_buffer, tg_caption)
+                            except Exception:
+                                pass
+                                
+                            st.session_state.retest_hafiza.add(sinyal_id)
+                        
+                        sonuclar.append({
+                            "Zaman Dilimi": f"{tf_ad} ({tf_kod})",
+                            "Yön": yon,
+                            "Onaylanan Formasyon": formasyon_adi,
+                            "Kırılan/Retest Hattı": f"{kirilan_seviye} $",
+                            "Sembol": temiz_parite,
+                            "Onay Fiyatı ($)": son_kapanis,
+                            "TP1 ($)": tp1,
+                            "TP2 ($)": tp2,
+                            "SL ($)": sl,
+                            "Hacim Katı": f"{round(hacim_orani, 1)}x",
+                            "Grafik": mexc_link
+                        })
+            except Exception:
+                pass
+                
     return pd.DataFrame(sonuclar)
 
 # --- ÇALIŞTIRMA VE GÖRÜNTÜLEME ---
-manuel_tara = st.button("🔍 Çizimli Retest Formasyonlarını Tara", type="primary", use_container_width=True)
+manuel_tara = st.button("🔍 Tüm Zaman Dilimlerini Manuel Tara", type="primary", use_container_width=True)
 
 if oto_yenileme or manuel_tara:
-    with st.spinner("Geometrik formasyonlar ve seviyeler çiziliyor..."):
-        df_sonuc = piyasa_tara()
+    with st.spinner("15m, 30m, 1h, 4h, 1d ve 1w zaman dilimlerinde formasyonlar taranıyor..."):
+        df_sonuc = coklu_zaman_dilimi_tara()
         
     if not df_sonuc.empty:
-        st.success(f"🎯 Retest Yapıp Onay Almış Fırsatlar ({pd.Timestamp.now().strftime('%H:%M:%S')}):")
+        st.success(f"🎯 Bulunan Onaylı Formasyonlar ({pd.Timestamp.now().strftime('%H:%M:%S')}):")
         st.dataframe(
             df_sonuc,
             column_config={"Grafik": st.column_config.LinkColumn("MEXC Link", display_text="Grafiği Aç ↗")},
             use_container_width=True
         )
     else:
-        st.info(f"Şu an kırılım sonrası retestini tamamlayıp teyit vermiş formasyon bulunamadı ({pd.Timestamp.now().strftime('%H:%M:%S')}).")
+        st.info(f"Şu an taranan zaman dilimlerinde onaylı retest formasyonu bulunamadı ({pd.Timestamp.now().strftime('%H:%M:%S')}).")
