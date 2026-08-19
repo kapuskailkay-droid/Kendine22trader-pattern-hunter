@@ -8,14 +8,13 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from streamlit_autorefresh import st_autorefresh
 
 matplotlib.use('Agg')
 
 # --- SAYFA YAPILANDIRMASI ---
 st.set_page_config(
-    page_title='MEXC VIP Saf Formasyon Radarı', layout='wide'
+    page_title='MEXC VIP Saf Geometrik Formasyon Radarı', layout='wide'
 )
 
 if 'formasyon_hafiza' not in st.session_state:
@@ -33,7 +32,7 @@ chat_id = st.sidebar.text_input('Telegram Chat ID', value='-1004434260285')
 topic_id = st.sidebar.text_input(
     'Formasyon Sekmesi Topic ID',
     value='',
-    help='Formasyon için açtığınız yeni konunun ID numarası (Ana grupsa boş bırakın)',
+    help='Formasyon için açtığınız konunun ID numarası (Ana grupsa boş bırakın)',
 )
 
 st.sidebar.markdown('---')
@@ -52,7 +51,7 @@ if oto_yenileme:
   st.sidebar.success(f'🟢 Canlı mod aktif: Her {yenileme_araligi} sn')
 
 st.sidebar.markdown('---')
-st.sidebar.header('🎯 Formasyon Tercihleri')
+st.sidebar.header('🎯 Geometrik Formasyon Tercihleri')
 
 zaman_dilimi = st.sidebar.selectbox(
     'Zaman Dilimi (Timeframe)',
@@ -60,39 +59,37 @@ zaman_dilimi = st.sidebar.selectbox(
     index=0,
 )
 
-formasyon_turu = st.sidebar.multiselect(
-    'Taranacak Formasyonlar',
+aktif_formasyonlar = st.sidebar.multiselect(
+    'Taranacak Grafik Formasyonları',
     options=[
         'W Formasyonu (İkili Dip)',
         'M Formasyonu (İkili Tepe)',
+        'TOBO (Ters Omuz Baş Omuz)',
+        'OBO (Omuz Baş Omuz)',
         'Boğa Bayrağı (Bull Flag)',
         'Ayı Bayrağı (Bear Flag)',
         'Yükselen Üçgen',
-        'Çekiç (Pinbar Dip)',
-        'Kayan Yıldız (Pinbar Tepe)',
-        'Yutan Boğa (Engulfing)',
-        'Yutan Ayı (Engulfing)',
+        'Alçalan Üçgen',
     ],
     default=[
         'W Formasyonu (İkili Dip)',
         'M Formasyonu (İkili Tepe)',
+        'TOBO (Ters Omuz Baş Omuz)',
+        'OBO (Omuz Baş Omuz)',
         'Boğa Bayrağı (Bull Flag)',
         'Ayı Bayrağı (Bear Flag)',
         'Yükselen Üçgen',
-        'Çekiç (Pinbar Dip)',
-        'Kayan Yıldız (Pinbar Tepe)',
-        'Yutan Boğa (Engulfing)',
-        'Yutan Ayı (Engulfing)',
+        'Alçalan Üçgen',
     ],
 )
 
 coin_adedi = st.sidebar.select_slider(
-    'Taranacak Coin Sayısı',
-    options=[30, 50, 100, 150],
-    value=50,
+    'Taranacak En Yüksek Hacimli Coin Sayısı',
+    options=[30, 50, 100, 150, 200],
+    value=100,
 )
 
-st.title('📐 MEXC Vadeli Gerçek Formasyon & Price Action Radarı')
+st.title('📐 MEXC Vadeli Saf Geometrik Grafik Formasyonları Radarı')
 
 
 # --- GRAFİK OLUŞTURMA ---
@@ -118,11 +115,11 @@ def grafik_olustur(df_mum, sembol, zaman_dilimi):
 
   buf = io.BytesIO()
   mpf.plot(
-      df_grafik.tail(35),
+      df_grafik.tail(45),
       type='candle',
       volume=True,
       style=s,
-      title=f'{sembol} ({zaman_dilimi})',
+      title=f'{sembol} ({zaman_dilimi}) - Formasyon Kırılımı',
       savefig=dict(fname=buf, dpi=120, bbox_inches='tight'),
   )
   buf.seek(0)
@@ -151,7 +148,7 @@ def telegram_fotograf_gonder(foto_buf, caption_metni):
       pass
 
 
-# --- HESAPLAYICILAR ---
+# --- TEKNİK HESAPLAMALAR & TP/SL ---
 def hesapla_atr(df, periyot=14):
   h_l = df['Yuksek'] - df['Dusuk']
   h_pc = (df['Yuksek'] - df['Kapanis'].shift(1)).abs()
@@ -173,143 +170,176 @@ def hesapla_tp_sl(fiyat, atr, yon='LONG'):
   return tp1, tp2, sl
 
 
-# --- FORMASYON TESPİT ALGORİTMASI ---
-def formasyon_ara(df, hacim_orani):
-  son = df.iloc[-1]
-  onceki = df.iloc[-2]
-
-  c_son, o_son, h_son, l_son = (
-      son['Kapanis'],
-      son['Acilis'],
-      son['Yuksek'],
-      son['Dusuk'],
-  )
-  c_on, o_on = onceki['Kapanis'], onceki['Acilis']
-
-  govde = abs(c_son - o_son)
-  ust_fitil = h_son - max(c_son, o_son)
-  alt_fitil = min(c_son, o_son) - l_son
-
+# ==============================================================
+# 📐 SAF GEOMETRİK GRAFİK FORMASYONLARI MOTORU (50 MUMLUK ALAN)
+# ==============================================================
+def geometrik_formasyon_bul(df, hacim_orani):
   highs = df['Yuksek'].values
   lows = df['Dusuk'].values
   closes = df['Kapanis'].values
+  opens = df['Acilis'].values
 
+  c_son = closes[-1]
+  c_on = closes[-2]
+  o_son = opens[-1]
+
+  # Yerel Swing Noktalarını Çıkar
   dip_idx = []
   tepe_idx = []
-  for i in range(2, len(df) - 2):
+  for i in range(3, len(df) - 3):
     if (
         lows[i] < lows[i - 1]
         and lows[i] < lows[i - 2]
+        and lows[i] < lows[i - 3]
         and lows[i] < lows[i + 1]
         and lows[i] < lows[i + 2]
+        and lows[i] < lows[i + 3]
     ):
       dip_idx.append(i)
     if (
         highs[i] > highs[i - 1]
         and highs[i] > highs[i - 2]
+        and highs[i] > highs[i - 3]
         and highs[i] > highs[i + 1]
         and highs[i] > highs[i + 2]
+        and highs[i] > highs[i + 3]
     ):
       tepe_idx.append(i)
 
-  # 1. W Formasyonu (İkili Dip)
-  if 'W Formasyonu (İkili Dip)' in formasyon_turu and len(dip_idx) >= 2:
+  # 1. 📐 W FORMASYONU (İKİLİ DİP BOYUN KIRILIMI)
+  if 'W Formasyonu (İkili Dip)' in aktif_formasyonlar and len(dip_idx) >= 2:
     d1, d2 = dip_idx[-2], dip_idx[-1]
-    if abs(lows[d1] - lows[d2]) / lows[d1] <= 0.018:
-      boyun = max([highs[k] for k in range(d1, d2 + 1)])
-      if c_son >= boyun and c_on < boyun and hacim_orani >= 1.2:
-        return '📐 W FORMASYONU (İKİLİ DİP BOYUN KIRILIMI)', '🟢 LONG'
-
-  # 2. M Formasyonu (İkili Tepe)
-  if 'M Formasyonu (İkili Tepe)' in formasyon_turu and len(tepe_idx) >= 2:
-    t1, t2 = tepe_idx[-2], tepe_idx[-1]
-    if abs(highs[t1] - highs[t2]) / highs[t1] <= 0.018:
-      boyun = min([lows[k] for k in range(t1, t2 + 1)])
-      if c_son <= boyun and c_on > boyun and hacim_orani >= 1.2:
-        return '📐 M FORMASYONU (İKİLİ TEPE BOYUN KIRILIMI)', '🔴 SHORT'
-
-  # 3. Boğa Bayrağı
-  if 'Boğa Bayrağı (Bull Flag)' in formasyon_turu and len(df) >= 15:
-    direk = ((closes[-4] - closes[-12]) / closes[-12]) * 100
-    konsolidasyon = (max(highs[-4:-1]) - min(lows[-4:-1])) / closes[-4] * 100
     if (
-        direk >= 4.0
-        and konsolidasyon <= 2.5
-        and c_son > max(highs[-4:-1])
+        abs(lows[d1] - lows[d2]) / lows[d1] <= 0.02
+        and (d2 - d1) >= 6
+        and (len(df) - 1 - d2) <= 8
+    ):
+      ara_tepeler = [highs[k] for k in range(d1, d2 + 1)]
+      if ara_tepeler:
+        boyun = max(ara_tepeler)
+        if (
+            c_son >= boyun
+            and c_on < boyun
+            and c_son > o_son
+            and hacim_orani >= 1.2
+        ):
+          return '📐 W FORMASYONU (İKİLİ DİP BOYUN KIRILIMI)', '🟢 LONG'
+
+  # 2. 📐 M FORMASYONU (İKİLİ TEPE TABAN KIRILIMI)
+  if 'M Formasyonu (İkili Tepe)' in aktif_formasyonlar and len(tepe_idx) >= 2:
+    t1, t2 = tepe_idx[-2], tepe_idx[-1]
+    if (
+        abs(highs[t1] - highs[t2]) / highs[t1] <= 0.02
+        and (t2 - t1) >= 6
+        and (len(df) - 1 - t2) <= 8
+    ):
+      ara_dipler = [lows[k] for k in range(t1, t2 + 1)]
+      if ara_dipler:
+        taban = min(ara_dipler)
+        if (
+            c_son <= taban
+            and c_on > taban
+            and c_son < o_son
+            and hacim_orani >= 1.2
+        ):
+          return '📐 M FORMASYONU (İKİLİ TEPE TABAN KIRILIMI)', '🔴 SHORT'
+
+  # 3. 👤 TOBO (TERS OMUZ BAŞ OMUZ)
+  if 'TOBO (Ters Omuz Baş Omuz)' in aktif_formasyonlar and len(dip_idx) >= 3:
+    sol_omuz, bas, sag_omuz = dip_idx[-3], dip_idx[-2], dip_idx[-1]
+    if (
+        lows[bas] < lows[sol_omuz]
+        and lows[bas] < lows[sag_omuz]
+        and abs(lows[sol_omuz] - lows[sag_omuz]) / lows[sol_omuz] <= 0.03
+    ):
+      boyun_bolgesi = max(
+          max(highs[sol_omuz:bas]),
+          max(highs[bas : sag_omuz + 1]),
+      )
+      if (
+          c_son >= boyun_bolgesi
+          and c_on < boyun_bolgesi
+          and c_son > o_son
+          and hacim_orani >= 1.2
+      ):
+        return '👤 TOBO (TERS OMUZ BAŞ OMUZ KIRILIMI)', '🟢 LONG'
+
+  # 4. 👤 OBO (OMUZ BAŞ OMUZ)
+  if 'OBO (Omuz Baş Omuz)' in aktif_formasyonlar and len(tepe_idx) >= 3:
+    sol_omuz, bas, sag_omuz = tepe_idx[-3], tepe_idx[-2], tepe_idx[-1]
+    if (
+        highs[bas] > highs[sol_omuz]
+        and highs[bas] > highs[sag_omuz]
+        and abs(highs[sol_omuz] - highs[sag_omuz]) / highs[sol_omuz] <= 0.03
+    ):
+      taban_bolgesi = min(
+          min(lows[sol_omuz:bas]),
+          min(lows[bas : sag_omuz + 1]),
+      )
+      if (
+          c_son <= taban_bolgesi
+          and c_on > taban_bolgesi
+          and c_son < o_son
+          and hacim_orani >= 1.2
+      ):
+        return '👤 OBO (OMUZ BAŞ OMUZ KIRILIMI)', '🔴 SHORT'
+
+  # 5. 🚩 BOĞA BAYRAĞI (BULL FLAG)
+  if 'Boğa Bayrağı (Bull Flag)' in aktif_formasyonlar and len(df) >= 20:
+    direk_kazanc = ((closes[-5] - closes[-16]) / closes[-16]) * 100
+    flama_aralik = (max(highs[-5:-1]) - min(lows[-5:-1])) / closes[-5] * 100
+    if (
+        direk_kazanc >= 4.5
+        and flama_aralik <= 2.2
+        and c_son > max(highs[-5:-1])
         and c_son > o_son
+        and hacim_orani >= 1.3
     ):
       return '🚩 BOĞA BAYRAĞI (BULL FLAG KIRILIMI)', '🟢 LONG'
 
-  # 4. Ayı Bayrağı
-  if 'Ayı Bayrağı (Bear Flag)' in formasyon_turu and len(df) >= 15:
-    direk_dusus = ((closes[-4] - closes[-12]) / closes[-12]) * 100
-    konsolidasyon = (max(highs[-4:-1]) - min(lows[-4:-1])) / closes[-4] * 100
+  # 6. 🚩 AYI BAYRAĞI (BEAR FLAG)
+  if 'Ayı Bayrağı (Bear Flag)' in aktif_formasyonlar and len(df) >= 20:
+    direk_kayip = ((closes[-5] - closes[-16]) / closes[-16]) * 100
+    flama_aralik = (max(highs[-5:-1]) - min(lows[-5:-1])) / closes[-5] * 100
     if (
-        direk_dusus <= -4.0
-        and konsolidasyon <= 2.5
-        and c_son < min(lows[-4:-1])
+        direk_kayip <= -4.5
+        and flama_aralik <= 2.2
+        and c_son < min(lows[-5:-1])
         and c_son < o_son
+        and hacim_orani >= 1.3
     ):
       return '🚩 AYI BAYRAĞI (BEAR FLAG KIRILIMI)', '🔴 SHORT'
 
-  # 5. Yükselen Üçgen
-  if (
-      'Yükselen Üçgen' in formasyon_turu
-      and len(tepe_idx) >= 2
-      and len(dip_idx) >= 2
-  ):
+  # 7. 📐 YÜKSELEN ÜÇGEN (ASCENDING TRIANGLE)
+  if 'Yükselen Üçgen' in aktif_formasyonlar and len(tepe_idx) >= 2 and len(dip_idx) >= 2:
     t1, t2 = highs[tepe_idx[-2]], highs[tepe_idx[-1]]
     d1, d2 = lows[dip_idx[-2]], lows[dip_idx[-1]]
-    if abs(t1 - t2) / t1 <= 0.012 and d2 > d1:
-      if c_son >= max(t1, t2) and hacim_orani >= 1.2:
-        return '📐 YÜKSELEN ÜÇGEN KIRILIMI', '🟢 LONG'
+    if abs(t1 - t2) / t1 <= 0.015 and d2 > d1:
+      if (
+          c_son >= max(t1, t2)
+          and c_on < max(t1, t2)
+          and c_son > o_son
+          and hacim_orani >= 1.2
+      ):
+        return '📐 YÜKSELEN ÜÇGEN (DİRENÇ KIRILIMI)', '🟢 LONG'
 
-  # 6. Çekiç (Pinbar Dip)
-  if 'Çekiç (Pinbar Dip)' in formasyon_turu:
-    if (
-        alt_fitil >= (2.0 * govde)
-        and ust_fitil <= (0.3 * govde)
-        and c_son > o_son
-    ):
-      if c_son <= np.mean(closes[-15:]) * 1.01:
-        return '🕯️ ÇEKİÇ / BULLISH PINBAR (DİP REAKSİYONU)', '🟢 LONG'
-
-  # 7. Kayan Yıldız (Pinbar Tepe)
-  if 'Kayan Yıldız (Pinbar Tepe)' in formasyon_turu:
-    if (
-        ust_fitil >= (2.0 * govde)
-        and alt_fitil <= (0.3 * govde)
-        and c_son < o_son
-    ):
-      if c_son >= np.mean(closes[-15:]) * 0.99:
-        return '🕯️ KAYAN YILDIZ / BEARISH PINBAR (TEPE RED)', '🔴 SHORT'
-
-  # 8. Yutan Boğa
-  if 'Yutan Boğa (Engulfing)' in formasyon_turu:
-    if (
-        c_on < o_on
-        and c_son > o_son
-        and c_son > o_on
-        and o_son < c_on
-        and hacim_orani >= 1.3
-    ):
-      return '🕯️ YUTAN BOĞA (BULLISH ENGULFING)', '🟢 LONG'
-
-  # 9. Yutan Ayı
-  if 'Yutan Ayı (Engulfing)' in formasyon_turu:
-    if (
-        c_on > o_on
-        and c_son < o_son
-        and c_son < o_on
-        and o_son > c_on
-        and hacim_orani >= 1.3
-    ):
-      return '🕯️ YUTAN AYI (BEARISH ENGULFING)', '🔴 SHORT'
+  # 8. 📐 ALÇALAN ÜÇGEN (DESCENDING TRIANGLE)
+  if 'Alçalan Üçgen' in aktif_formasyonlar and len(tepe_idx) >= 2 and len(dip_idx) >= 2:
+    t1, t2 = highs[tepe_idx[-2]], highs[tepe_idx[-1]]
+    d1, d2 = lows[dip_idx[-2]], lows[dip_idx[-1]]
+    if abs(d1 - d2) / d1 <= 0.015 and t2 < t1:
+      if (
+          c_son <= min(d1, d2)
+          and c_on > min(d1, d2)
+          and c_son < o_son
+          and hacim_orani >= 1.2
+      ):
+        return '📐 ALÇALAN ÜÇGEN (DESTEK KIRILIMI)', '🔴 SHORT'
 
   return None, None
 
 
-# --- TARAMA FONKSİYONU ---
+# --- PİYASA TARAYICI ---
 def piyasa_tara():
   mexc = ccxt.mexc(
       {'options': {'defaultType': 'swap'}, 'enableRateLimit': True}
@@ -331,8 +361,8 @@ def piyasa_tara():
 
   for sembol in hedef_listesi:
     try:
-      mumlar = mexc.fetch_ohlcv(sembol, timeframe=zaman_dilimi, limit=35)
-      if len(mumlar) >= 20:
+      mumlar = mexc.fetch_ohlcv(sembol, timeframe=zaman_dilimi, limit=50)
+      if len(mumlar) >= 30:
         df = pd.DataFrame(
             mumlar,
             columns=['Zaman', 'Acilis', 'Yuksek', 'Dusuk', 'Kapanis', 'Hacim'],
@@ -343,7 +373,7 @@ def piyasa_tara():
         hacim_orani = son_hacim / gecmis_hacim if gecmis_hacim > 0 else 0
         son_kapanis = df['Kapanis'].iloc[-1]
 
-        formasyon_adi, yon = formasyon_ara(df, hacim_orani)
+        formasyon_adi, yon = geometrik_formasyon_bul(df, hacim_orani)
 
         if formasyon_adi:
           temiz_parite = sembol.split(':')[0]
@@ -356,18 +386,17 @@ def piyasa_tara():
 
           sinyal_id = f'{temiz_parite}_{formasyon_adi}_{zaman_dilimi}'
 
-          # Telegram Gönderimi
           if (
               telegram_aktif
               and sinyal_id not in st.session_state.formasyon_hafiza
           ):
             tg_caption = (
-                f'📐 <b>MEXC FORMASYON SİNYALİ</b>\n\n'
+                f'📐 <b>MEXC GRAFİK FORMASYON SİNYALİ</b>\n\n'
                 f'📌 <b>Parite:</b> {temiz_parite}\n'
                 f'🎯 <b>Yön:</b> {yon}\n'
                 f'⚡ <b>Formasyon:</b> {formasyon_adi}\n'
-                f'⏱ <b>Zaman Dilimi:</b> {zaman_dilimi}\n'
-                f'💰 <b>Giriş Fiyatı:</b> {son_kapanis} $\n'
+                f'⏱ <b>Zaman:</b> {zaman_dilimi}\n'
+                f'💰 <b>Kırılım Fiyatı:</b> {son_kapanis} $\n'
                 f'📊 <b>Hacim Katı:</b> {round(hacim_orani, 1)}x\n\n'
                 f'🎯 <b>HEDEF 1 (TP1):</b> {tp1} $\n'
                 f'🎯 <b>HEDEF 2 (TP2):</b> {tp2} $\n'
@@ -384,7 +413,7 @@ def piyasa_tara():
 
           sonuclar.append({
               'Yön': yon,
-              'Tespit Edilen Formasyon': formasyon_adi,
+              'Tespit Edilen Geometrik Formasyon': formasyon_adi,
               'Sembol': temiz_parite,
               'Fiyat ($)': son_kapanis,
               'TP1 ($)': tp1,
@@ -398,13 +427,13 @@ def piyasa_tara():
   return pd.DataFrame(sonuclar)
 
 
-# --- EKRAN KONTROLLERİ ---
+# --- ÇALIŞTIRMA VE GÖRÜNTÜLEME ---
 manuel_tara = st.button(
-    '🔍 Formasyonları Tara', type='primary', use_container_width=True
+    '🔍 Geometrik Formasyonları Tara', type='primary', use_container_width=True
 )
 
 if oto_yenileme or manuel_tara:
-  with st.spinner('Formasyonlar taranıyor...'):
+  with st.spinner('Grafik formasyonları taranıyor...'):
     df_sonuc = piyasa_tara()
 
   if not df_sonuc.empty:
