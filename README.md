@@ -1,0 +1,1 @@
+# Kendine22trader-pattern-hunter
