@@ -2,4 +2,4 @@ requests
 pandas
 matplotlib
 mplfinance
-python-telegram-bot
+numpy
