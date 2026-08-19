@@ -1,5 +1,5 @@
-requests==2.31.0
-pandas==2.2.0
-matplotlib==3.8.2
-mplfinance==0.12.10b0
-numpy==1.26.4
+requests
+pandas
+matplotlib
+mplfinance
+python-telegram-bot
